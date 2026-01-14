@@ -1,0 +1,11 @@
+FROM alpine:latest
+
+RUN apk upgrade --update \
+    && apk add --no-cache --update bash vim \
+    && rm -rf /var/cache/apk/*
+RUN adduser -h /home/todo -s /bin/bash -D todo
+USER todo
+ADD --chown=todo:todo *.sh /home/todo
+ADD --chown=todo:todo .bashrc /home/todo
+RUN /home/todo/setup.sh
+WORKDIR /home/todo

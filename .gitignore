@@ -3,3 +3,13 @@
 
 # MacOS files
 .DS_Store
+
+# Some dirs that are often used for generated stuff, build results, temp files
+tmp/
+out/
+dist/
+
+# Archives
+*.zip
+*.tar
+*.tar.gz
