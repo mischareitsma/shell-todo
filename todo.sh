@@ -40,6 +40,8 @@ declare -r TODO_EDITOR="vi"
 
 # --- usage: Usage functions and texts ---
 
+declare -r TODO_LINE="$(printf "%0.1s" "-"{0..80})"
+
 TODO_USAGE_TEXT_MAIN="Usage: ${TODO_PROG_NAME} <command>
 
 Simple command line todo tool.
@@ -164,8 +166,8 @@ add_todo()
 		version: ${TODO_FORMAT_VERSION}
 		date: $(date -I)
 		time: $(date +%R:%S)
-		status: todo
-		desc: ${text:0:50}
+		state: todo
+		description: ${text:0:50}
 	EOF
 
 	# Increment and saving of sequence number is done as soon as the
@@ -197,6 +199,78 @@ add_todo()
 		fi
 
 		"${TODO_EDITOR}" "${todo_file}" "+${line}"
+	fi
+}
+
+# ---list: List todos.
+list()
+{
+	debug "list(): ${*}"
+	project="${1}"
+
+	if [[ -z "${project}" ]]; then
+		list_all_projects
+	else
+		list_project "${project}" "${2}"
+	fi
+}
+
+list_all_projects()
+{
+	# Use sequence files to figure out which are valid todo projects. Cannot
+	# guarantee that there will not be more .info files later.
+	echo "${TODO_LINE}"
+	for project_path in "${TODO_DIR}/"*.seq; do
+		debug "Printing todos for ${project_path}"
+		project="${project_path##*/}" # Strip path
+		project="${project%.*}" # Strip .seq
+		list_project "${project}"
+		echo "${TODO_LINE}"
+	done
+
+	# TODO: (Mischa Reitsma, 2026-01-16) Add a nice overview format
+	# something like:
+	# project   | n | state  | description
+	# --------- | - | ------ | -----------------
+	# inbox     | 0 | todo   | This is a todo
+	# inbox     | 1 | active | Some other todo
+	# myProject | 0 | active | Some project todo
+}
+
+list_project()
+{
+	declare -r project="${1}"
+	declare -ri todo_number="${2:--1}"
+	declare -r project_path="$(todo_path "${project}")"
+
+	# TODO: (Mischa Reitsma, 2026-01-15) Complain (validate project) or just ignore? For now ignore.
+	if [[ ! -d "${project_path}" ]]; then
+		return
+	fi
+
+	if [[ ${todo_number} -ne -1 ]]; then
+		declare -r todo_file="${project_path}/${todo_number}.todo"
+		if [[ ! -f "${project_path}/${todo_number}.todo" ]]; then
+			err "todo ${todo_number} for project ${project} does not exist" 1
+		fi
+		echo "Project ${project} todo ${todo_number}:"
+		grep "description:" "${todo_file}"
+		grep "state:" "${todo_file}"
+	else
+		echo "Project ${project}:"
+		grep -v -e '^$' "$(todo_path "${project}.info")"
+		for todo_file in "${TODO_DIR}/${project}/"*.todo; do
+			debug "Printing todo file ${todo_file}"
+			n="${todo_file##*/}"
+			n="${n%%.*}"
+			if [[ "${n}" == "*" ]]; then
+				continue
+			fi
+			echo ""
+			echo "Project ${project} todo ${n}:"
+			grep "description:" "${todo_file}"
+			grep "state:" "${todo_file}"
+		done
 	fi
 }
 
@@ -249,7 +323,7 @@ project_add()
 	echo "0" > "${TODO_DIR}/${project}.seq"
 	mkdir "${TODO_DIR}/${project}/"
 
-	touch "${TODO_DIR}/${project}.info"
+	echo "description: " > "${TODO_DIR}/${project}.info"
 	"${TODO_EDITOR}" "${TODO_DIR}/${project}.info"
 }
 
@@ -318,6 +392,9 @@ main()
 			;;
 		"p"|"project")
 			project "${@}"
+			;;
+		"l"|"list")
+			list "${@}"
 			;;
 		"-h"|"h"|"help"|"--help")
 			usage
