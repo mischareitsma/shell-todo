@@ -38,9 +38,14 @@ declare -r TODO_APP_VERSION="0.0.1"
 # start editing on line n)
 declare -r TODO_EDITOR="vi"
 
+# Used for printing, 80 dashes
+declare -r TODO_LINE="$(printf "%0.1s" "-"{0..80})"
+
+# Valid states
+declare -r TODO_STATES="todo doing done"
+
 # --- usage: Usage functions and texts ---
 
-declare -r TODO_LINE="$(printf "%0.1s" "-"{0..80})"
 
 TODO_USAGE_TEXT_MAIN="Usage: ${TODO_PROG_NAME} <command>
 
@@ -131,16 +136,16 @@ add()
 
 	while [[ "${cli}" =~ -.* ]]; do
 		shift
-			case "${cli}" in
-				"-p")
-					project="${1}"
-					[[ -z "${project}"  || "${project}" =~ -.* ]] && usage "add" "Project flag -p requires valid project name" 1
-					shift
-					;;
-				"-e")
-					edit_mode=1
-					;;
-			esac
+		case "${cli}" in
+			"-p")
+				project="${1}"
+				[[ -z "${project}"  || "${project}" =~ -.* ]] && usage "add" "Project flag -p requires valid project name" 1
+				shift
+				;;
+			"-e")
+				edit_mode=1
+				;;
+		esac
 		cli="${1}"
 	done
 
@@ -259,7 +264,7 @@ list_project()
 	else
 		echo "Project ${project}:"
 		grep -v -e '^$' "$(todo_path "${project}.info")"
-		for todo_file in "${TODO_DIR}/${project}/"*.todo; do
+		for todo_file in $(project_all_names); do
 			debug "Printing todo file ${todo_file}"
 			n="${todo_file##*/}"
 			n="${n%%.*}"
@@ -272,6 +277,53 @@ list_project()
 			grep "state:" "${todo_file}"
 		done
 	fi
+}
+
+pretty_list()
+{
+	declare projects=""
+	declare filter_state=""
+
+	# Could do getopts, but doing this while case shift thing now everywhere
+	# anyway.
+	cli="${1}"
+
+	while [[ "${cli}" =~ -.* ]]; do
+		shift
+		case "${cli}" in
+			"-p")
+				project="${1}"
+				[[ -z "${projects}"  || "${projects}" =~ -.* ]] && usage "add" "Project flag -p requires valid project name" 1
+				shift
+				;;
+			"-s")
+				filter_state="${1}"
+				if ! echo "${TODO_STATES}" | grep -qw "${filter_state}"; then
+					err "Invalid state ${filter_state}, valid states: ${TODO_STATES}"
+				fi
+				shift
+				;;
+		esac
+		cli="${1}"
+	done
+
+	if [[ -z "${project}" ]]; then
+		projects=$(project_all_names)
+	fi
+
+	for project in ${projects}; do
+		while read -r todo_path; do
+			state=$(grep "state:" "${todo_path}" | cut -d":" -f2 | awk '{$1=$1};1')
+			if [[ -n "${filter_state}" && "${state}" != "${filter_state}" ]]; then
+				continue
+			fi
+			description=$(grep "description:" "${todo_path}" | cut -d":" -f2 | awk '{$1=$1};1')
+			n="$(basename "${todo_path}")"
+			n=${n%%.*}
+			printf "| %-8s | %3d | %-5s | %-50s |\n" "${project}" "${n}" "${state}" "${description}"
+		done < <(find "$(todo_path "${project}")" -name "*.todo" -exec echo {} \;)
+	done
+
 }
 
 # --- project: Project related functions ---
@@ -367,6 +419,11 @@ validate_project()
 	fi
 }
 
+project_all_names()
+{
+	find "${TODO_DIR}" -name "*.seq" -exec basename {} \; | cut -d'.' -f1 | tr "\n" " "
+}
+
 # --- main: Main entrypoint of the shell-todo app ---
 main()
 {
@@ -386,6 +443,7 @@ main()
 	command="${1}"
 	shift
 
+	# TODO: (Mischa Reitsma, 2026-01-17) Some of these subcommand names are terrible or should be merged!
 	case "${command}" in
 		"a"|"add")
 			add "${@}"
@@ -394,6 +452,9 @@ main()
 			project "${@}"
 			;;
 		"l"|"list")
+			pretty_list "${@}"
+			;;
+		"d"|"details")
 			list "${@}"
 			;;
 		"-h"|"h"|"help"|"--help")
