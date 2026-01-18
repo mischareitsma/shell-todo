@@ -44,17 +44,21 @@ declare -r TODO_LINE="$(printf "%0.1s" "-"{0..80})"
 # Valid states
 declare -r TODO_STATES="todo doing done"
 
-# --- usage: Usage functions and texts ---
 
+# ----------------------------------
+# --- utility: Utility functions ---
+# ----------------------------------
 
-TODO_USAGE_TEXT_MAIN="Usage: ${TODO_PROG_NAME} <command>
+# Append $1 to TODO_DIR and echo.
+todo_path()
+{
+	debug "todo_path() ${1}"
+	echo "${TODO_DIR}/${1}"
+}
 
-Simple command line todo tool.
-
-The commands that are supported:
-  - add: Add a new todo item.
-  - project: Project maintenance.
-"
+# -------------------------
+# --- add: Adding todos ---
+# -------------------------
 
 TODO_USAGE_TEXT_ADD="Usage: ${TODO_PROG_NAME} add [-p project] [-eh] text
 
@@ -66,57 +70,6 @@ Options:
   -e: Edit the todo to add more info.
   -h: Display this help message
 "
-
-TODO_USAGE_TEXT_PROJECT="Usage: ${TODO_PROG_NAME} project subcommand [options]
-
-The project command is used to maintain todo projects. The command requires a
-sub command with additional options.
-
-The following subcommands are available:
-  - h/help: Displays this help menu
-  - a/add: Create a new project
-  - e/edit: Edit a project
-  - d/delete: Delete a project
-"
-
-usage()
-{
-	debug "usage(): ${*}"
-		
-	usage_text_name="${1:-main}"
-
-	if [[ -n "${2}" ]]; then
-	echo "${2}"
-	fi
-
-	case "${usage_text_name}" in
-		"main")
-			echo "${TODO_USAGE_TEXT_MAIN}"
-			;;
-		"add")
-			echo "${TODO_USAGE_TEXT_ADD}"
-			;;
-		"project")
-			echo "${TODO_USAGE_TEXT_PROJECT}"
-			;;
-		*)
-			err "Invalid usage name: ${usage_text_name}" 1
-			;;
-	esac
-
-	exit "${3:-0}"
-}
-
-# --- utility: Utility functions ---
-
-# Append $1 to TODO_DIR and echo.
-todo_path()
-{
-	debug "todo_path() ${1}"
-	echo "${TODO_DIR}/${1}"
-}
-
-# --- add: Adding todos ---
 
 add()
 {
@@ -144,6 +97,9 @@ add()
 				;;
 			"-e")
 				edit_mode=1
+				;;
+			"-h")
+				usage "add"
 				;;
 		esac
 		cli="${1}"
@@ -207,42 +163,41 @@ add_todo()
 	fi
 }
 
-# ---list: List todos.
-list()
+# ---------------------------------------
+# --- details: Print details of todos ---
+# ---------------------------------------
+TODO_USAGE_TEXT_DETAILS="Usage: ${TODO_PROG_NAME} details [project [todo]]
+
+List the details of todos. There are two optional positional parameters:
+
+  - project: The project to print.
+  - todo: Single todo in a project to print.
+"
+
+details()
 {
 	debug "list(): ${*}"
 	project="${1}"
 
 	if [[ -z "${project}" ]]; then
-		list_all_projects
+		details_all_projects
 	else
-		list_project "${project}" "${2}"
+		details_project "${project}" "${2}"
 	fi
 }
 
-list_all_projects()
+details_all_projects()
 {
 	# Use sequence files to figure out which are valid todo projects. Cannot
 	# guarantee that there will not be more .info files later.
 	echo "${TODO_LINE}"
-	for project_path in "${TODO_DIR}/"*.seq; do
-		debug "Printing todos for ${project_path}"
-		project="${project_path##*/}" # Strip path
-		project="${project%.*}" # Strip .seq
-		list_project "${project}"
+	for project in $(project_all_names); do
+		details_project "${project}"
 		echo "${TODO_LINE}"
 	done
-
-	# TODO: (Mischa Reitsma, 2026-01-16) Add a nice overview format
-	# something like:
-	# project   | n | state  | description
-	# --------- | - | ------ | -----------------
-	# inbox     | 0 | todo   | This is a todo
-	# inbox     | 1 | active | Some other todo
-	# myProject | 0 | active | Some project todo
 }
 
-list_project()
+details_project()
 {
 	declare -r project="${1}"
 	declare -ri todo_number="${2:--1}"
@@ -264,7 +219,7 @@ list_project()
 	else
 		echo "Project ${project}:"
 		grep -v -e '^$' "$(todo_path "${project}.info")"
-		for todo_file in $(project_all_names); do
+		for todo_file in "${project_path}/"*.todo; do
 			debug "Printing todo file ${todo_file}"
 			n="${todo_file##*/}"
 			n="${n%%.*}"
@@ -279,7 +234,19 @@ list_project()
 	fi
 }
 
-pretty_list()
+
+# -----------------------
+# ---list: List todos ---
+# -----------------------
+TODO_USAGE_TEXT_LIST="Usage: ${TODO_PROG_NAME} list [-p project] [-s state] [-h]
+
+List all todos. Filter todos using the following options:
+  -h: Display this help
+  -p: Filter on project. By default displays all options.
+  -s: Filter on state. By default displays all states.
+"
+
+list()
 {
 	declare projects=""
 	declare filter_state=""
@@ -303,6 +270,8 @@ pretty_list()
 				fi
 				shift
 				;;
+			"-h")
+				usage "list"
 		esac
 		cli="${1}"
 	done
@@ -312,6 +281,8 @@ pretty_list()
 	fi
 
 	for project in ${projects}; do
+		# TODO: (Mischa Reitsma, 2026-01-17) Sould be able to fetch all
+		# the TODOs in a list using a function
 		while read -r todo_path; do
 			state=$(grep "state:" "${todo_path}" | cut -d":" -f2 | awk '{$1=$1};1')
 			if [[ -n "${filter_state}" && "${state}" != "${filter_state}" ]]; then
@@ -326,7 +297,22 @@ pretty_list()
 
 }
 
+# ------------------------------------------
 # --- project: Project related functions ---
+# ------------------------------------------
+
+TODO_USAGE_TEXT_PROJECT="Usage: ${TODO_PROG_NAME} project subcommand [project_name]
+
+The project command is used to maintain todo projects. The command requires a
+sub command with additional options.
+
+The following subcommands are available:
+  - h/help: Displays this help menu
+  - a/add: Create a new project
+  - e/edit: Edit a project
+  - d/delete: Delete a project
+"
+
 project()
 {
 	subcommand="${1}"
@@ -424,6 +410,113 @@ project_all_names()
 	find "${TODO_DIR}" -name "*.seq" -exec basename {} \; | cut -d'.' -f1 | tr "\n" " "
 }
 
+# --- edit: Edit todos
+declare -r TODO_USAGE_TEXT_EDIT="${TODO_PROG_DIR} edit [-p project] [-s state] number
+
+Edit a todo. The positional parameter is the todo number to edit, and has to
+be the last argument in the list. The following optional arguments affect how
+the todo is edited:
+
+  -p: Edit todo in a particular project. Use default project if not passed.
+  -s: Update state only to the state passed to this option.
+"
+
+edit()
+{
+	# TODO: (Mischa Reitsma, 2026-01-18) Again arg parsing like this, some
+	# are same. Really need to see how to generalize this.
+	cli="${1}"
+	shift
+
+	declare project="${TODO_DEFAULT_PROJECT}"
+	declare state=""
+
+	while [[ "${cli}" =~ -.* ]]; do
+		case "${cli}" in
+			"-p")
+				project="${1}"
+				[[ -z "${projects}"  || "${projects}" =~ -.* ]] && usage "edit" "Project flag -p requires valid project name" 1
+				shift
+				;;
+			"-s")
+				state="${1}"
+				[[ -z "${state}" || "${state}" =~ -.* ]] && usage "edit" "State flag -s requires a value"
+				if ! echo "${TODO_STATES}" | grep -qw "${state}"; then
+					usage "edit" "Invalid state ${state}, valid states: ${TODO_STATES}" 2
+				fi
+		esac
+		shift
+		cli="${1}"
+	done
+
+	# TODO: (Mischa Reitsma, 2026-01-18) This style or if [[ ]]; then ...; fi?
+	[[ -z "${cli}" ]] && usage "edit" "missing todo number to edit" 3
+
+	# Do not declare as number, as it could default to 0 unintentionally
+	declare n="${cli}"
+
+	todo_path="$(todo_path "${project}")/${n}.todo"
+
+	[[ ! -f "${todo_path}" ]] && usage "edit" "Invalid todo ${n}" 4
+
+	if [[ -n "${state}" ]]; then
+		declare -r curr_state="$(grep "^state:" "${todo_path}")"
+		sed -i -e "s/${curr_state}/state: ${state}/" "${todo_path}"
+	else
+		"${TODO_EDITOR}" "${todo_path}"
+	fi
+}
+
+# --- usage: Main usage test and usage functions
+TODO_USAGE_TEXT_MAIN="Usage: ${TODO_PROG_NAME} <command>
+
+Simple command line todo tool.
+
+The commands that are supported:
+  - add: Add a new todo item.
+  - project: Project maintenance.
+  - list: List todos
+  - details: Print details of todos
+  - edit: Edit a todo
+"
+
+usage()
+{
+	debug "usage(): ${*}"
+		
+	usage_text_name="${1:-main}"
+
+	if [[ -n "${2}" ]]; then
+		echo "${2}"
+	fi
+
+	case "${usage_text_name}" in
+		"main")
+			echo "${TODO_USAGE_TEXT_MAIN}"
+			;;
+		"add")
+			echo "${TODO_USAGE_TEXT_ADD}"
+			;;
+		"project")
+			echo "${TODO_USAGE_TEXT_PROJECT}"
+			;;
+		"list")
+			echo "${TODO_USAGE_TEXT_LIST}"
+			;;
+		"details")
+			echo "${TODO_USAGE_TEXT_DETAILS}"
+			;;
+		"edit")
+			echo "${TODO_USAGE_TEXT_EDIT}"
+			;;
+		*)
+			err "Invalid usage name: ${usage_text_name}" 1
+			;;
+	esac
+
+	exit "${3:-0}"
+}
+
 # --- main: Main entrypoint of the shell-todo app ---
 main()
 {
@@ -452,10 +545,13 @@ main()
 			project "${@}"
 			;;
 		"l"|"list")
-			pretty_list "${@}"
+			list "${@}"
 			;;
 		"d"|"details")
-			list "${@}"
+			details "${@}"
+			;;
+		"e"|"edit")
+			edit "${@}"
 			;;
 		"-h"|"h"|"help"|"--help")
 			usage
