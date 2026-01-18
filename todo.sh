@@ -1,6 +1,22 @@
 #!/usr/bin/env bash
 # Simple todo CLI app main script. Check usage text for usage.
 
+# TODO: (Mischa Reitsma, 2026-01-18) There is a mix of err and usage. Need to
+# determine when err applies and when usage applied. The difference should be
+# easy: missing input is usage, enough input but invalid input is err.
+
+# TODO: (Mischa Reitsma, 2026-01-18) Implement project_xyz vars that are
+# global and can be loaded with a function. These can then be used in
+# functions. Be careful not to do validations in case we are in create project
+# mode.
+
+# TODO: (Mischa Reitsma, 2026-01-18) Enhance delete to archive first, delete
+# later. This also comes with a restructure of the todo files and dir. Idea is
+# that the project is a dir, inside is the info and seq file and a todo dir and
+# a archive dir. The todo dir has the todos (with extension still, clearer when
+# running find commands etc.), the archive dir the delete todos. The archive
+# number system is different from the normal todo number system, just
+
 # --- Debug and error stuff ---
 
 if [[ "${TODO_DEBUG_TRACE}" -eq 1 ]]; then
@@ -467,17 +483,105 @@ edit()
 	fi
 }
 
+# --------------------------------------------
+# --- delete: Delete a todo from a project ---
+# --------------------------------------------
+declare -r TODO_USAGE_TEXT_DELETE="Usage: ${TODO_PROG_NAME} delete [-p project] todo_number
+
+Delete a todo from a project. The last parameter is the todo number to delete.
+An optional -p flag can be used to determine from which project to delete the
+todo:
+  -p: Project to delete the todo from. If not passed delete from the default
+      project.
+"
+
+delete()
+{
+	declare project="${TODO_DEFAULT_PROJECT}"
+	if [[ "${1}" == "-p" ]]; then
+		project="${2}"
+		if [[ -z "${project}" || ! -d "$(todo_path "${project}")" ]]; then
+			err "Cannot delete: invalid project passed with the -p flag" 1
+		fi
+
+		shift 2
+	fi
+
+	project_path="$(todo_path "${project}")"
+
+	# Do not declare as integer, as it could default to 0 for non-numeric
+	# input and by accident delete todo number 0.
+	declare -r todo_number="${1}"
+
+	if [[ ! -f "${project_path}/${todo_number}.todo" ]]; then
+		err "Cannot delete: todo ${todo_number} does not exist" 2
+	fi
+
+	rm "${project_path?}/${todo_number}.todo"
+}
+
+# -------------------------------------------------------------
+# --- move: Move a todo from one project to another project ---
+# -------------------------------------------------------------
+declare -r TODO_USAGE_TEXT_MOVE="Usage: ${TODO_PROG_NAME} move [from_project] to_project todo_number
+
+Move a todo from one project to another. If three arguments are passed then
+the arguments are interpreted as:
+
+  - Project from which to move the todo.
+  - Project to which to move the todo.
+  - The todo number in the project.
+
+When two arguments are passed, the from_project is set to the default project.
+"
+
+move()
+{
+	declare from_project="${TODO_DEFAULT_PROJECT}"
+	declare to_project=""
+	declare todo_number=""
+	
+	if [[ "${#}" -eq 3 ]]; then
+		from_project="${1}"
+		to_project="${2}"
+		todo_number="${3}"
+	elif [[ "${#}" -eq 2 ]]; then
+		to_project="${1}"
+		todo_number="${2}"
+	else
+		usage "move" "Invalid number of arguments"
+	fi
+
+	validate_project "${from_project}"
+	validate_project "${to_project}"
+
+	from_project_path="$(todo_path "${from_project}")"
+	if [[ ! -f "${from_project_path}/${todo_number}.todo" ]]; then
+		err "Cannot move todo, todo ${todo_number} does not exist" 1
+	fi
+
+	to_project_path="$(todo_path "${to_project}")"
+	seq_file="$(todo_path "${to_project}.seq")"
+	declare -i seq
+	seq="$(cat "${seq_file}")"
+
+	mv "${from_project_path?}/${todo_number}.todo" "${to_project_path?}/${seq}.todo"
+	((++seq)) && echo "${seq}" > "${seq_file}"
+}
+
 # --- usage: Main usage test and usage functions
-TODO_USAGE_TEXT_MAIN="Usage: ${TODO_PROG_NAME} <command>
+declare -r TODO_USAGE_TEXT_MAIN="Usage: ${TODO_PROG_NAME} <command>
 
 Simple command line todo tool.
 
 The commands that are supported:
-  - add: Add a new todo item.
-  - project: Project maintenance.
-  - list: List todos
-  - details: Print details of todos
-  - edit: Edit a todo
+  - a/add: Add a new todo item.
+  - p/project: Project maintenance.
+  - l/list: List todos.
+  - details: Print details of todos.
+  - e/delete: Delete a todo.
+  - e/edit: Edit a todo.
+  - h/help: Display this help text.
 "
 
 usage()
@@ -508,6 +612,15 @@ usage()
 			;;
 		"edit")
 			echo "${TODO_USAGE_TEXT_EDIT}"
+			;;
+		"delete")
+			echo "${TODO_USAGE_TEXT_DELETE}"
+			;;
+		"move")
+			echo "${TODO_USAGE_TEXT_MOVE}"
+			;;
+		"clean")
+			echo "${TODO_USAGE_TEXT_CLEAN}"
 			;;
 		*)
 			err "Invalid usage name: ${usage_text_name}" 1
@@ -547,13 +660,19 @@ main()
 		"l"|"list")
 			list "${@}"
 			;;
-		"d"|"details")
+		"details")
 			details "${@}"
+			;;
+		"d"|"delete")
+			delete "${@}"
 			;;
 		"e"|"edit")
 			edit "${@}"
 			;;
-		"-h"|"h"|"help"|"--help")
+		"m"|"move")
+			move "${@}"
+			;;
+		"h"|"help")
 			usage
 			;;
 		*)
