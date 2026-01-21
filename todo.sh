@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
 # Simple todo CLI app main script. Check usage text for usage.
 
-# TODO: (Mischa Reitsma, 2026-01-18) There is a mix of err and usage. Need to
-# determine when err applies and when usage applied. The difference should be
-# easy: missing input is usage, enough input but invalid input is err.
-
 # TODO: (Mischa Reitsma, 2026-01-18) Implement project_xyz vars that are
 # global and can be loaded with a function. These can then be used in
 # functions. Be careful not to do validations in case we are in create project
@@ -16,6 +12,10 @@
 # a archive dir. The todo dir has the todos (with extension still, clearer when
 # running find commands etc.), the archive dir the delete todos. The archive
 # number system is different from the normal todo number system, just
+
+# TODO: (Mischa Reitsma, 2026-01-18) There is a mix of err and usage. Need to
+# determine when err applies and when usage applied. The difference should be
+# easy: missing input is usage, enough input but invalid input is err.
 
 # --- Debug and error stuff ---
 
@@ -55,10 +55,73 @@ declare -r TODO_APP_VERSION="0.0.1"
 declare -r TODO_EDITOR="vi"
 
 # Used for printing, 80 dashes
-declare -r TODO_LINE="$(printf "%0.1s" "-"{0..80})"
+TODO_LINE="$(printf "%0.1s" "-"{0..80})"
+declare -r TODO_LINE
 
 # Valid states
 declare -r TODO_STATES="todo doing done"
+
+# --------------------------------------------
+# project variables: set project variables ---
+# --------------------------------------------
+
+# The name of the project, a simple string
+declare project_name=""
+
+# The path where all files and directories of a project are stored
+declare project_path=""
+
+# Path where the todo files of a project are stored
+declare project_todo_path=""
+
+# Path where the deleted todos are stored for final deletion
+declare project_archive_path=""
+
+# Path of the sequence file of a project
+declare project_seq_file=""
+
+# Path of the information file of a project
+declare project_info_file=""
+
+load_project_vars() {
+	project_name="${1}"
+	declare -i skip_validate="${2:-0}" # Default to not skip validations.
+
+	project_path="$(todo_path "${project_name}")"
+	project_todo_path="${project_path?}/todo"
+	project_archive_path="${project_path?}/archive"
+	project_seq_file="${project_path?}/${project_name}.seq"
+	project_info_file="${project_path?}/${project_name}.info"
+
+	[[ "${skip_validate}" -eq 0 ]] && validate_project
+
+	debug "project_name: ${project_name}"
+	debug "project_path: ${project_path}"
+	debug "project_todo_path: ${project_todo_path}"
+	debug "project_archive_path: ${project_archive_path}"
+	debug "project_seq_file: ${project_seq_file}"
+	debug "project_info_file: ${project_info_file}"
+}
+
+validate_project()
+{
+	# Files with data and sequence should exist
+	if [[ ! -f ${project_info_file} ]]; then
+		err "Project info file ${project_info_file} does not exist" 1
+	fi
+
+	if [[ ! -f "${project_seq_file}" ]]; then
+		err "Project sequence file ${project_seq_file} does not exist" 2
+	fi
+
+	if [[ ! -d "${project_todo_path}" ]]; then
+		err "Project todo directory ${project_todo_path} does not exist" 3
+	fi
+
+	if [[ ! -d "${project_archive_path}" ]]; then
+		err "Project archive directory ${project_archive_path} does not exist" 4
+	fi
+}
 
 
 # ----------------------------------
@@ -75,7 +138,6 @@ todo_path()
 # -------------------------
 # --- add: Adding todos ---
 # -------------------------
-
 TODO_USAGE_TEXT_ADD="Usage: ${TODO_PROG_NAME} add [-p project] [-eh] text
 
 Text should be 50 chars. If more, it is cut off and the text will also be the
@@ -121,21 +183,20 @@ add()
 		cli="${1}"
 	done
 
-	validate_project "${project}"
-	add_todo "${project}" "${edit_mode}" "${*}"
+	load_project_vars "${project}"
+	_add_todo "${edit_mode}" "${*}"
 }
 
-add_todo()
+_add_todo()
 {
-	debug "add_todo() ${*}"
-	project="${1}"
-	seq_file="$(todo_path "${project}.seq")"
-	seq=$(cat "${seq_file}")
+	debug "_add_todo() ${*}"
+	
+	seq=$(cat "${project_seq_file}")
 
-	edit_mode="${2}"
-	shift 2
+	edit_mode="${1}"
+	shift 1
 
-	declare -r todo_file=$(todo_path "${project}/${seq}.todo")
+	declare -r todo_file=$(todo_path "${project_todo_path}/${seq}.todo")
 
 	text="${*}"
 
@@ -153,7 +214,7 @@ add_todo()
 	# todo in a second terminal. If the increment and saving of the new
 	# number is done at the end of this function the second todo would
 	# override the first one.
-	((++seq)) && echo "${seq}" > "${seq_file}"
+	((++seq)) && echo "${seq}" > "${project_seq_file}"
 
 	declare -ri text_size="${#text}"
 	declare -i line=5
@@ -169,7 +230,7 @@ add_todo()
 		done
 	fi
 	if [[ "${edit_mode}" -eq 1 ]]; then
-		debug "add_todo(): edit mode line: ${line}"
+		debug "_add_todo(): edit mode line: ${line}"
 		if [[ "${line}" -eq 5 ]]; then
 			printf "\n\n" >> "${todo_file}"
 			((line+=2))
@@ -192,50 +253,44 @@ List the details of todos. There are two optional positional parameters:
 
 details()
 {
-	debug "list(): ${*}"
-	project="${1}"
+	debug "details(): ${*}"
 
-	if [[ -z "${project}" ]]; then
-		details_all_projects
+	if [[ -z "${1}" ]]; then
+		_details_all_projects
 	else
-		details_project "${project}" "${2}"
+		_details_project "${1}" "${2}"
 	fi
 }
 
-details_all_projects()
+_details_all_projects()
 {
 	# Use sequence files to figure out which are valid todo projects. Cannot
 	# guarantee that there will not be more .info files later.
 	echo "${TODO_LINE}"
 	for project in $(project_all_names); do
-		details_project "${project}"
+		_details_project "${project}"
 		echo "${TODO_LINE}"
 	done
 }
 
-details_project()
+_details_project()
 {
-	declare -r project="${1}"
+	debug "_details_project() ${*}"
+	load_project_vars "${1}"
 	declare -ri todo_number="${2:--1}"
-	declare -r project_path="$(todo_path "${project}")"
-
-	# TODO: (Mischa Reitsma, 2026-01-15) Complain (validate project) or just ignore? For now ignore.
-	if [[ ! -d "${project_path}" ]]; then
-		return
-	fi
 
 	if [[ ${todo_number} -ne -1 ]]; then
-		declare -r todo_file="${project_path}/${todo_number}.todo"
-		if [[ ! -f "${project_path}/${todo_number}.todo" ]]; then
-			err "todo ${todo_number} for project ${project} does not exist" 1
+		declare -r todo_file="${project_todo_path}/${todo_number}.todo"
+		if [[ ! -f "${project_todo_path}/${todo_number}.todo" ]]; then
+			err "todo ${todo_number} for project ${project_name} does not exist" 1
 		fi
-		echo "Project ${project} todo ${todo_number}:"
+		echo "Project ${project_name} todo ${todo_number}:"
 		grep "description:" "${todo_file}"
 		grep "state:" "${todo_file}"
 	else
-		echo "Project ${project}:"
-		grep -v -e '^$' "$(todo_path "${project}.info")"
-		for todo_file in "${project_path}/"*.todo; do
+		echo "Project ${project_name}:"
+		grep -v -e '^$' "${project_info_file}"
+		for todo_file in "${project_todo_path}/"*.todo; do
 			debug "Printing todo file ${todo_file}"
 			n="${todo_file##*/}"
 			n="${n%%.*}"
@@ -243,7 +298,7 @@ details_project()
 				continue
 			fi
 			echo ""
-			echo "Project ${project} todo ${n}:"
+			echo "Project ${project_name} todo ${n}:"
 			grep "description:" "${todo_file}"
 			grep "state:" "${todo_file}"
 		done
@@ -292,13 +347,14 @@ list()
 		cli="${1}"
 	done
 
-	if [[ -z "${project}" ]]; then
+	if [[ -z "${projects}" ]]; then
 		projects=$(project_all_names)
 	fi
 
 	for project in ${projects}; do
-		# TODO: (Mischa Reitsma, 2026-01-17) Sould be able to fetch all
+		# TODO: (Mischa Reitsma, 2026-01-17) Should be able to fetch all
 		# the TODOs in a list using a function
+		load_project_vars "${project}"
 		while read -r todo_path; do
 			state=$(grep "state:" "${todo_path}" | cut -d":" -f2 | awk '{$1=$1};1')
 			if [[ -n "${filter_state}" && "${state}" != "${filter_state}" ]]; then
@@ -307,10 +363,9 @@ list()
 			description=$(grep "description:" "${todo_path}" | cut -d":" -f2 | awk '{$1=$1};1')
 			n="$(basename "${todo_path}")"
 			n=${n%%.*}
-			printf "| %-8s | %3d | %-5s | %-50s |\n" "${project}" "${n}" "${state}" "${description}"
-		done < <(find "$(todo_path "${project}")" -name "*.todo" -exec echo {} \;)
+			printf "| %-8s | %3d | %-5s | %-50s |\n" "${project_name}" "${n}" "${state}" "${description}"
+		done < <(find "${project_todo_path}" -name "*.todo" -exec echo {} \;)
 	done
-
 }
 
 # ------------------------------------------
@@ -360,70 +415,52 @@ project()
 
 project_add()
 {
-	declare -r project="${1}"
+	load_project_vars "${1}" 1
 
-	if [[ -f $(todo_path "${project}.info") ]]; then
-		err "Project info file ${project}.info already exists" 1
+	if [[ -f "${project_info_file}" ]]; then
+		err "Project info file already exists" 1
 	fi
 
-	if [[ -f $(todo_path "${project}.seq") ]]; then
-		err "Project sequence file ${project}.seq already exists" 2
+	if [[ -f "${project_seq_file}" ]]; then
+		err "Project sequence file already exists" 2
 	fi
 
-	if [[ -d $(todo_path "${project}") ]]; then
-		err "Project todo directory ${project} already exists" 3
+	if [[ -d "${project_todo_path}" ]]; then
+		err "Project todo directory already exists" 3
 	fi
 
-	echo "0" > "${TODO_DIR}/${project}.seq"
-	mkdir "${TODO_DIR}/${project}/"
+	if [[ -d "${project_archive_path}" ]]; then
+		err "Project todo directory already exists" 3
+	fi
 
-	echo "description: " > "${TODO_DIR}/${project}.info"
-	"${TODO_EDITOR}" "${TODO_DIR}/${project}.info"
+	mkdir -p "${project_path}"
+	mkdir "${project_todo_path}"
+	mkdir "${project_archive_path}"
+
+	echo "0" > "${project_seq_file}"
+
+	echo "description: " > "${project_info_file}"
+	"${TODO_EDITOR}" "${project_info_file}"
 }
 
 project_edit()
 {
-	declare -r project="${1}"
+	load_project_vars "${1}"
 
-	validate_project "${project}"
-
-	# TODO: (Mischa Reitsma, 2026-01-13) Support more editors?
-	"${TODO_EDITOR}" "${TODO_DIR}/${project}.info"
+	"${TODO_EDITOR}" "${project_info_file}"
 }
 
 project_delete()
 {
-	declare -r project="${1}"
+	load_project_vars "${1}"
 
-	# If not valid project a manual delete is required
-	validate_project "${project}"
-
-	tar -cz -f "${TODO_ARCHIVE_DIR}/${project}.tar.gz" -C "${TODO_DIR}" "${project}."{seq,info} "${project}/"
-	rm "${TODO_DIR}/${project}".{seq,info}
-	rm -r "${TODO_DIR:?}/${project}/"
-}
-
-validate_project()
-{
-	declare -r project="${1}"
-
-	# Files with data and sequence should exist
-	if [[ ! -f $(todo_path "${project}.info") ]]; then
-		err "Project info file ${project}.info does not exist" 1
-	fi
-
-	if [[ ! -f $(todo_path "${project}.seq") ]]; then
-		err "Project sequence file ${project}.seq does not exist" 2
-	fi
-
-	if [[ ! -d $(todo_path "${project}") ]]; then
-		err "Project todo directory ${project} does not exist" 3
-	fi
+	tar -cz -f "${TODO_ARCHIVE_DIR}/${project}.tar.gz" -C "${TODO_DIR}" "${project_path}"
+	rm -r "${project_path}"
 }
 
 project_all_names()
 {
-	find "${TODO_DIR}" -name "*.seq" -exec basename {} \; | cut -d'.' -f1 | tr "\n" " "
+	find "${TODO_DIR}" -name "**/*.seq" -exec basename {} \; | cut -d'.' -f1 | tr "\n" " "
 }
 
 # --- edit: Edit todos
@@ -468,10 +505,12 @@ edit()
 	# TODO: (Mischa Reitsma, 2026-01-18) This style or if [[ ]]; then ...; fi?
 	[[ -z "${cli}" ]] && usage "edit" "missing todo number to edit" 3
 
+	load_project_vars "${project}"
+
 	# Do not declare as number, as it could default to 0 unintentionally
 	declare n="${cli}"
 
-	todo_path="$(todo_path "${project}")/${n}.todo"
+	todo_path="${project_todo_path}/${n}.todo"
 
 	[[ ! -f "${todo_path}" ]] && usage "edit" "Invalid todo ${n}" 4
 
@@ -500,24 +539,24 @@ delete()
 	declare project="${TODO_DEFAULT_PROJECT}"
 	if [[ "${1}" == "-p" ]]; then
 		project="${2}"
-		if [[ -z "${project}" || ! -d "$(todo_path "${project}")" ]]; then
+		if [[ -z "${project}" ]]; then
 			err "Cannot delete: invalid project passed with the -p flag" 1
 		fi
 
 		shift 2
 	fi
 
-	project_path="$(todo_path "${project}")"
+	load_project_vars
 
 	# Do not declare as integer, as it could default to 0 for non-numeric
 	# input and by accident delete todo number 0.
 	declare -r todo_number="${1}"
 
-	if [[ ! -f "${project_path}/${todo_number}.todo" ]]; then
+	if [[ ! -f "${project_todo_path?}/${todo_number}.todo" ]]; then
 		err "Cannot delete: todo ${todo_number} does not exist" 2
 	fi
 
-	rm "${project_path?}/${todo_number}.todo"
+	rm "${project_todo_path?}/${todo_number}.todo"
 }
 
 # -------------------------------------------------------------
@@ -552,21 +591,19 @@ move()
 		usage "move" "Invalid number of arguments"
 	fi
 
-	validate_project "${from_project}"
-	validate_project "${to_project}"
+	load_project_vars "${from_project}"
 
-	from_project_path="$(todo_path "${from_project}")"
-	if [[ ! -f "${from_project_path}/${todo_number}.todo" ]]; then
+	declare -r todo_to_move="${project_todo_path}/${todo_number}.todo"
+
+	if [[ ! -f "${todo_to_move}" ]]; then
 		err "Cannot move todo, todo ${todo_number} does not exist" 1
 	fi
 
-	to_project_path="$(todo_path "${to_project}")"
-	seq_file="$(todo_path "${to_project}.seq")"
-	declare -i seq
-	seq="$(cat "${seq_file}")"
+	load_project_vars "${to_project}"
+	seq="$(cat "${project_seq_file}")"
 
-	mv "${from_project_path?}/${todo_number}.todo" "${to_project_path?}/${seq}.todo"
-	((++seq)) && echo "${seq}" > "${seq_file}"
+	mv "${todo_to_move}" "${project_todo_path?}/${seq}.todo"
+	((++seq)) && echo "${seq}" > "${project_seq_file}"
 }
 
 # --- usage: Main usage test and usage functions
